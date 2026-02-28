@@ -13,7 +13,7 @@ Add the dependency in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/glassh/GlasSecretStore.git", from: "1.0.0"),
+    .package(url: "https://github.com/msitarzewski/GlasSecretStore.git", from: "1.0.0"),
 ]
 ```
 
