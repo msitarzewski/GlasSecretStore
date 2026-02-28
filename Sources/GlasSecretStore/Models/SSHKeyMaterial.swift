@@ -7,11 +7,11 @@
 
 import Foundation
 
-public struct SSHKeyMaterial: Sendable {
-    public let privateKey: String
-    public let passphrase: String?
+public struct SSHKeyMaterial: @unchecked Sendable {
+    public let privateKey: SecureBytes
+    public let passphrase: SecureBytes?
 
-    public init(privateKey: String, passphrase: String?) {
+    public init(privateKey: SecureBytes, passphrase: SecureBytes?) {
         self.privateKey = privateKey
         self.passphrase = passphrase
     }

@@ -71,7 +71,7 @@ public enum SecureEnclaveKeyManager: Sendable {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let ref = result {
-            return unsafeBitCast(ref, to: SecKey.self)
+            return (ref as! SecKey)
         }
         if !createIfMissing { return nil }
 

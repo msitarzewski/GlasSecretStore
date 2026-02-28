@@ -19,6 +19,9 @@ public enum KeychainOperations: Sendable {
         service: String,
         config: SecretStoreConfiguration
     ) throws {
+        guard !value.isEmpty else {
+            throw SecretStoreError.encodingFailed
+        }
         guard let data = value.data(using: .utf8) else {
             throw SecretStoreError.encodingFailed
         }
@@ -68,23 +71,40 @@ public enum KeychainOperations: Sendable {
 
     // MARK: - Data Operations
 
+    private static let maxPayloadBytes = 1_048_576 // 1 MB
+
     public static func saveData(
         _ data: Data,
         account: String,
         service: String,
         config: SecretStoreConfiguration
     ) throws {
-        // Delete any existing entry first
-        let deleteQuery = baseQuery(account: account, service: service, config: config)
-        SecItemDelete(deleteQuery as CFDictionary)
+        guard data.count <= maxPayloadBytes else {
+            throw SecretStoreError.payloadTooLarge(data.count)
+        }
 
+        // Atomic upsert: try update first, fall back to add
+        let updateQuery = baseQuery(account: account, service: service, config: config)
+        let updateValues: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: config.accessibility,
+            kSecAttrComment as String: config.migrationMarkerComment
+        ]
+        let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateValues as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+
+        guard updateStatus == errSecItemNotFound else {
+            throw SecretStoreError.unableToSave
+        }
+
+        // Item does not exist — add it
         var addQuery = baseQuery(account: account, service: service, config: config)
         addQuery[kSecAttrAccessible as String] = config.accessibility
         addQuery[kSecAttrComment as String] = config.migrationMarkerComment
         addQuery[kSecValueData as String] = data
 
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        guard status == errSecSuccess else {
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
             throw SecretStoreError.unableToSave
         }
     }
@@ -138,7 +158,7 @@ public enum KeychainOperations: Sendable {
 
     // MARK: - Bulk Query (for migration)
 
-    public static func allItems(
+    package static func allItems(
         service: String,
         config: SecretStoreConfiguration
     ) -> [[String: Any]] {
@@ -161,12 +181,12 @@ public enum KeychainOperations: Sendable {
         return items
     }
 
-    public static func updateItem(
+    package static func updateItem(
         account: String,
         service: String,
         data: Data,
         config: SecretStoreConfiguration
-    ) -> Bool {
+    ) throws {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
@@ -182,7 +202,9 @@ public enum KeychainOperations: Sendable {
             kSecAttrComment as String: config.migrationMarkerComment
         ]
         let status = SecItemUpdate(query as CFDictionary, updateValues as CFDictionary)
-        return status == errSecSuccess
+        guard status == errSecSuccess else {
+            throw SecretStoreError.updateFailed(account: account, status: status)
+        }
     }
 
     public static func itemCount(

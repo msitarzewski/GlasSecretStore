@@ -13,20 +13,20 @@ public enum SSHKeyKeychainStore: Sendable {
     // MARK: - Save
 
     public static func save(
-        privateKey: String,
-        passphrase: String?,
+        privateKey: SecureBytes,
+        passphrase: SecureBytes?,
         for keyID: UUID,
         config: SecretStoreConfiguration
     ) throws {
-        try KeychainOperations.savePassword(
-            privateKey,
+        try KeychainOperations.saveData(
+            privateKey.toData(),
             account: keyID.uuidString,
             service: config.sshKeysPrivateService,
             config: config
         )
-        if let passphrase, !passphrase.isEmpty {
-            try KeychainOperations.savePassword(
-                passphrase,
+        if let passphrase, passphrase.count > 0 {
+            try KeychainOperations.saveData(
+                passphrase.toData(),
                 account: keyID.uuidString,
                 service: config.sshKeysPassphraseService,
                 config: config
@@ -47,25 +47,31 @@ public enum SSHKeyKeychainStore: Sendable {
         for keyID: UUID,
         config: SecretStoreConfiguration
     ) throws -> SSHKeyMaterial {
-        // Try plain key first
-        if let privateKey = try? KeychainOperations.retrievePassword(
+        // Try plain key first (retrieve as Data to avoid intermediate String)
+        if let privateKeyData = try? KeychainOperations.retrieveData(
             account: keyID.uuidString,
             service: config.sshKeysPrivateService,
             config: config
         ) {
-            let passphrase = try? KeychainOperations.retrievePassword(
+            let passphraseData = try? KeychainOperations.retrieveData(
                 account: keyID.uuidString,
                 service: config.sshKeysPassphraseService,
                 config: config
             )
-            return SSHKeyMaterial(privateKey: privateKey, passphrase: passphrase)
+            return SSHKeyMaterial(
+                privateKey: SecureBytes(privateKeyData),
+                passphrase: passphraseData.map { SecureBytes($0) }
+            )
         }
 
         // Try Secure Enclave wrapped P256
         if let (wrapped, keyTag) = try? retrieveSecureEnclaveWrapped(for: keyID, config: config) {
             let raw = try SecureEnclaveKeyManager.unwrap(wrapped: wrapped, keyTag: keyTag)
             let marker = "SECURE_ENCLAVE_P256:\(raw.base64EncodedString())"
-            return SSHKeyMaterial(privateKey: marker, passphrase: nil)
+            return SSHKeyMaterial(
+                privateKey: SecureBytes(Data(marker.utf8)),
+                passphrase: nil
+            )
         }
 
         throw SecretStoreError.notFound
@@ -77,24 +83,19 @@ public enum SSHKeyKeychainStore: Sendable {
         for keyID: UUID,
         config: SecretStoreConfiguration
     ) throws {
-        try KeychainOperations.deleteItem(
-            account: keyID.uuidString,
-            service: config.sshKeysPrivateService,
-            config: config
-        )
-        try? KeychainOperations.deleteItem(
-            account: keyID.uuidString,
-            service: config.sshKeysPassphraseService,
-            config: config
-        )
-        // Clean up Secure Enclave artifacts
-        if let keyTag = try? KeychainOperations.retrievePassword(
+        // 1. Read SE key tag while references still exist
+        let seKeyTag = try? KeychainOperations.retrievePassword(
             account: keyID.uuidString,
             service: config.sealedP256TagService,
             config: config
-        ) {
+        )
+
+        // 2. Delete SE key from Secure Enclave first
+        if let keyTag = seKeyTag {
             SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: keyTag)
         }
+
+        // 3. Delete SE Keychain artifacts (wrapped blob + tag)
         try? KeychainOperations.deleteItem(
             account: keyID.uuidString,
             service: config.sealedP256Service,
@@ -103,6 +104,18 @@ public enum SSHKeyKeychainStore: Sendable {
         try? KeychainOperations.deleteItem(
             account: keyID.uuidString,
             service: config.sealedP256TagService,
+            config: config
+        )
+
+        // 4. Delete main Keychain entries last
+        try KeychainOperations.deleteItem(
+            account: keyID.uuidString,
+            service: config.sshKeysPrivateService,
+            config: config
+        )
+        try? KeychainOperations.deleteItem(
+            account: keyID.uuidString,
+            service: config.sshKeysPassphraseService,
             config: config
         )
     }

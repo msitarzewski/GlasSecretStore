@@ -98,7 +98,9 @@ public final class SecretStoreMigrationManager: @unchecked Sendable {
         if let data = try? JSONEncoder().encode(report) {
             defaults.set(data, forKey: migrationReportKey)
         }
-        defaults.set(scaffoldVersion, forKey: migrationVersionKey)
+        if report.failedItemCount == 0 {
+            defaults.set(scaffoldVersion, forKey: migrationVersionKey)
+        }
         return report
     }
 
@@ -135,11 +137,12 @@ public final class SecretStoreMigrationManager: @unchecked Sendable {
                 failed += 1
                 continue
             }
-            if KeychainOperations.updateItem(
-                account: account, service: service, data: data, config: config
-            ) {
+            do {
+                try KeychainOperations.updateItem(
+                    account: account, service: service, data: data, config: config
+                )
                 migrated += 1
-            } else {
+            } catch {
                 failed += 1
             }
         }

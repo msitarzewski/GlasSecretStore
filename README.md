@@ -61,12 +61,15 @@ try KeychainOperations.deletePassword(account: "user@host", service: config.pass
 ```swift
 let keyID = UUID()
 
-// Save a key (private key + optional passphrase)
-try SSHKeyKeychainStore.save(privateKey: pemString, passphrase: "passphrase", for: keyID, config: config)
+// Save a key (private key + optional passphrase wrapped in SecureBytes)
+let keyData = SecureBytes(Data(pemString.utf8))
+let passData = SecureBytes(Data("passphrase".utf8))
+try SSHKeyKeychainStore.save(privateKey: keyData, passphrase: passData, for: keyID, config: config)
 
-// Retrieve
+// Retrieve — returns SecureBytes (mlock'd, zeroed on dealloc)
 let material = try SSHKeyKeychainStore.retrieve(for: keyID, config: config)
-// material.privateKey, material.passphrase
+material.privateKey.withUnsafeBytes { bytes in /* use raw key bytes */ }
+let keyString = material.privateKey.toUTF8String()  // escape hatch
 
 // Delete (cleans up passphrase and Secure Enclave artifacts too)
 try SSHKeyKeychainStore.delete(for: keyID, config: config)
