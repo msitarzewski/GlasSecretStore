@@ -31,6 +31,9 @@ Every Keychain operation takes a `SecretStoreConfiguration` parameter — no sin
 ### Migration Marker
 Items stamped with `config.migrationMarkerComment` in `kSecAttrComment` to distinguish migrated vs. legacy items. `itemCount(legacyOnly:)` filters on this.
 
+### Two-Pass Bulk Keychain Query
+`allItems` cannot combine `kSecReturnData` with `kSecMatchLimitAll` on macOS (returns `errSecParam -50`). The pattern is: (1) bulk-fetch attributes with `kSecMatchLimitAll`, (2) fetch data per-item with `kSecMatchLimitOne` using the item's account.
+
 ### SecureBytes
 `SecureBytes` wraps sensitive key material in an `mlock`'d buffer that is zeroed on dealloc. `SSHKeyMaterial.privateKey` and `.passphrase` use this type. Retrieve paths go through `retrieveData` (not `retrievePassword`) to avoid intermediate `String` copies.
 

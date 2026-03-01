@@ -10,4 +10,4 @@
 - [projectRules.md](./projectRules.md) — Coding standards, conventions
 
 ## Task Logs
-- [tasks/2026-02/README.md](./tasks/2026-02/README.md) — February 2026 summary
+- [tasks/2026-02/README.md](./tasks/2026-02/README.md) — February 2026 summary (includes March 2026-03-01 test target)

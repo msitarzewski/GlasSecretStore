@@ -20,5 +20,13 @@ None — zero external dependencies. Pure Apple frameworks only.
 swift build
 ```
 
-## No Tests Yet
-Test target not defined in `Package.swift`. To be added.
+## Testing
+- Framework: Swift Testing (`import Testing`, `@Suite`, `@Test`, `#expect`)
+- 51 tests across 7 files, 12 suites
+- Keychain tests use unique `serviceNamePrefix` per class + `defer` cleanup for isolation
+- Secure Enclave tests are minimal (unavailable on Simulator)
+- Run: `swift test`
+
+## Known macOS Keychain Behavior
+- `kSecReturnData + kSecMatchLimitAll` returns `errSecParam (-50)` — must use two-pass (attributes bulk, data per-item)
+- Unsigned test processes have the same limitation; production signed apps do too (it's a SecItem API constraint, not a signing issue)

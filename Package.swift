@@ -13,5 +13,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "GlasSecretStore"),
+        .testTarget(name: "GlasSecretStoreTests", dependencies: ["GlasSecretStore"]),
     ]
 )

@@ -162,12 +162,14 @@ public enum KeychainOperations: Sendable {
         service: String,
         config: SecretStoreConfiguration
     ) -> [[String: Any]] {
+        // Two-pass approach: macOS returns errSecParam (-50) when combining
+        // kSecReturnData with kSecMatchLimitAll. Fetch attributes first,
+        // then retrieve data per-item.
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true,
-            kSecReturnData as String: true
+            kSecReturnAttributes as String: true
         ]
         if let accessGroup = config.accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
@@ -178,7 +180,29 @@ public enum KeychainOperations: Sendable {
         guard status == errSecSuccess, let items = result as? [[String: Any]] else {
             return []
         }
-        return items
+
+        // Fetch data for each item individually
+        return items.map { item in
+            var enriched = item
+            if let account = item[kSecAttrAccount as String] as? String {
+                var dataQuery: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrAccount as String: account,
+                    kSecAttrService as String: service,
+                    kSecMatchLimit as String: kSecMatchLimitOne,
+                    kSecReturnData as String: true
+                ]
+                if let accessGroup = config.accessGroup {
+                    dataQuery[kSecAttrAccessGroup as String] = accessGroup
+                }
+                var dataResult: AnyObject?
+                if SecItemCopyMatching(dataQuery as CFDictionary, &dataResult) == errSecSuccess,
+                   let data = dataResult as? Data {
+                    enriched[kSecValueData as String] = data
+                }
+            }
+            return enriched
+        }
     }
 
     package static func updateItem(

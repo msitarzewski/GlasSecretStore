@@ -35,3 +35,11 @@ Sources/GlasSecretStore/
 - Internal-only helpers (`updateItem`) should be `package`-scoped and `throws`
 - Reject empty strings before Keychain save (prevents silent data loss via upsert)
 - Migration version stamp must be conditional on zero failures
+
+### Testing
+- Use Swift Testing framework (`@Suite`, `@Test`, `#expect`)
+- Keychain test isolation: unique `serviceNamePrefix` per test class via `"test.\(type).\(UUID().prefix(8))"`
+- Cleanup: `defer { cleanupKeychain() }` in every test touching Keychain
+- UserDefaults isolation: unique `suiteName` per test class, cleaned up in defer
+- Never combine `kSecReturnData` + `kSecMatchLimitAll` in production or tests — use two-pass
+- Secure Enclave: only test graceful failure paths (unavailable on Simulator)
