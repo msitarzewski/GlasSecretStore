@@ -24,6 +24,7 @@ struct ConfigurationTests {
         #expect(config.sshKeysPassphraseService == "com.test.sshkeys.passphrase")
         #expect(config.sealedP256Service == "com.test.sshkeys.sealedp256")
         #expect(config.sealedP256TagService == "com.test.sshkeys.sealedp256.tag")
+        #expect(config.sshHostTrustService == "com.test.ssh.hosttrust")
     }
 
     @Test("Access group passes through")

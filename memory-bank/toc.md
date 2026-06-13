@@ -11,3 +11,4 @@
 
 ## Task Logs
 - [tasks/2026-02/README.md](./tasks/2026-02/README.md) — February 2026 summary (includes March 2026-03-01 test target)
+- [tasks/2026-06/README.md](./tasks/2026-06/README.md) — June 2026 summary (SSH host trust storage)
