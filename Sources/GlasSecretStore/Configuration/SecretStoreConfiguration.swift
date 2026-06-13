@@ -50,4 +50,5 @@ public struct SecretStoreConfiguration: @unchecked Sendable {
     public var sshKeysPassphraseService: String { "\(serviceNamePrefix).sshkeys.passphrase" }
     public var sealedP256Service: String { "\(serviceNamePrefix).sshkeys.sealedp256" }
     public var sealedP256TagService: String { "\(serviceNamePrefix).sshkeys.sealedp256.tag" }
+    public var sshHostTrustService: String { "\(serviceNamePrefix).ssh.hosttrust" }
 }

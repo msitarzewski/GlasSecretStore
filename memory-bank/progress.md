@@ -37,6 +37,13 @@
   - Tests cover: SecureBytes, all model types, Configuration, KeychainOperations, SSHKeyKeychainStore, MigrationManager, SecureEnclaveKeyManager
   - Migration stamp test confirmed the fix — items actually get migrated now
 
+## Completed (continued)
+- SSH host trust storage (2026-06-13):
+  - Added `PinnedSSHHostKey` model for normalized host/port/algorithm trust records, SHA256 fingerprints, multi-key storage accounts, and base64 migration from consumer app records
+  - Added `SSHHostTrustKeychainStore` with save, exact retrieve, host/port records, contains, delete, all-host listing, and pure changed-key evaluation
+  - Added `SecretStoreConfiguration.sshHostTrustService`
+  - Kept UI policy out of the package and preserved existing public APIs by reusing `SecretStoreError.encodingFailed` for validation failures
+  - Tests now pass at 62 tests across 13 suites
+
 ## Not Started
 - CI/CD
-- Remote repository / public hosting
