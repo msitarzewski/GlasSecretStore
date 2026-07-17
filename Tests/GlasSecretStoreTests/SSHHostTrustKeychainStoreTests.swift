@@ -189,6 +189,154 @@ struct SSHHostTrustKeychainStoreTests {
         #expect(hostKey.sha256Fingerprint == "SHA256:legacy")
     }
 
+    @Test("Legacy records decode as active generation zero")
+    func legacyRecordDecodingIsBackwardCompatible() throws {
+        let keyData = Data("legacy-server-key".utf8)
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let lastSeenAt = Date(timeIntervalSince1970: 1_700_000_100)
+        let legacyPayload: [String: Any] = [
+            "host": "Legacy.EXAMPLE.com",
+            "port": 22,
+            "algorithm": "SSH-ED25519",
+            "publicKeyData": keyData.base64EncodedString(),
+            "sha256Fingerprint": PinnedSSHHostKey.sha256Fingerprint(for: keyData),
+            "createdAt": createdAt.timeIntervalSinceReferenceDate,
+            "lastSeenAt": lastSeenAt.timeIntervalSinceReferenceDate,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacyPayload)
+
+        let decoded = try JSONDecoder().decode(PinnedSSHHostKey.self, from: data)
+
+        #expect(decoded.host == "legacy.example.com")
+        #expect(decoded.algorithm == "ssh-ed25519")
+        #expect(decoded.generation == 0)
+        #expect(decoded.state == .active)
+        #expect(decoded.revokedAt == nil)
+        #expect(decoded.replacedBySHA256Fingerprint == nil)
+    }
+
+    @Test("Rotation retains history without authorizing the previous key")
+    func rotationRevokesPriorKey() throws {
+        defer { cleanupKeychain() }
+        let oldData = Data("old-server-key".utf8)
+        let newData = Data("new-server-key".utf8)
+        try SSHHostTrustKeychainStore.save(
+            host: "rotate.example.com",
+            port: 22,
+            algorithm: "ssh-ed25519",
+            publicKeyData: oldData,
+            config: config
+        )
+        let replacedAt = Date(timeIntervalSince1970: 1_700_000_200)
+
+        let replacement = try SSHHostTrustKeychainStore.replace(
+            with: PinnedSSHHostKey(
+                host: "rotate.example.com",
+                port: 22,
+                algorithm: "ssh-ed25519",
+                publicKeyData: newData
+            ),
+            config: config,
+            replacedAt: replacedAt
+        )
+
+        #expect(replacement.generation == 1)
+        #expect(replacement.state == .active)
+        let authorized = try SSHHostTrustKeychainStore.authorizedRecords(
+            host: "rotate.example.com",
+            port: 22,
+            config: config
+        )
+        #expect(authorized.map(\.publicKeyData) == [newData])
+        let records = try SSHHostTrustKeychainStore.records(
+            host: "rotate.example.com",
+            port: 22,
+            config: config
+        )
+        let history = try #require(records.first { $0.publicKeyData == oldData })
+        #expect(history.state == .revoked)
+        #expect(history.revokedAt == replacedAt)
+        #expect(history.replacedBySHA256Fingerprint == replacement.sha256Fingerprint)
+
+        let oldEvaluation = try SSHHostTrustKeychainStore.evaluate(
+            host: "rotate.example.com",
+            port: 22,
+            algorithm: "ssh-ed25519",
+            publicKeyData: oldData,
+            config: config
+        )
+        guard case .changed(let previous, _) = oldEvaluation else {
+            Issue.record("A revoked key must be reported as changed, never trusted")
+            return
+        }
+        #expect(previous.map(\.publicKeyData) == [newData])
+    }
+
+    @Test("Revoked history alone does not mark an endpoint trusted")
+    func revokedHistoryDoesNotAuthorizeEndpoint() throws {
+        defer { cleanupKeychain() }
+        let revoked = PinnedSSHHostKey(
+            host: "history-only.example.com",
+            port: 22,
+            algorithm: "ssh-ed25519",
+            publicKeyData: Data("historical-key".utf8)
+        ).revoked(
+            at: Date(timeIntervalSince1970: 1_700_000_300),
+            replacedBy: "SHA256:replacement"
+        )
+        try SSHHostTrustKeychainStore.save(revoked, config: config)
+
+        #expect(!SSHHostTrustKeychainStore.contains(
+            host: revoked.host,
+            port: revoked.port,
+            config: config
+        ))
+        #expect(try SSHHostTrustKeychainStore.authorizedRecords(
+            host: revoked.host,
+            port: revoked.port,
+            config: config
+        ).isEmpty)
+    }
+
+    @Test("Rotation history is bounded per endpoint")
+    func rotationHistoryIsBounded() throws {
+        defer { cleanupKeychain() }
+        let host = "bounded-history.example.com"
+        try SSHHostTrustKeychainStore.save(
+            host: host,
+            port: 22,
+            algorithm: "ssh-ed25519",
+            publicKeyData: Data("key-0".utf8),
+            config: config
+        )
+
+        for index in 1...6 {
+            try SSHHostTrustKeychainStore.replace(
+                with: PinnedSSHHostKey(
+                    host: host,
+                    port: 22,
+                    algorithm: "ssh-ed25519",
+                    publicKeyData: Data("key-\(index)".utf8)
+                ),
+                config: config,
+                replacedAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index)),
+                historyLimit: 3
+            )
+        }
+
+        let records = try SSHHostTrustKeychainStore.records(host: host, port: 22, config: config)
+        #expect(records.count == 4)
+        #expect(records.filter { $0.state == .revoked }.count == 3)
+        let authorized = try SSHHostTrustKeychainStore.authorizedRecords(
+            host: host,
+            port: 22,
+            config: config
+        )
+        #expect(authorized.count == 1)
+        #expect(authorized.first?.publicKeyData == Data("key-6".utf8))
+        #expect(authorized.first?.generation == 6)
+    }
+
     @Test("Evaluate reports notPinned when no host key exists")
     func evaluateNotPinned() throws {
         defer { cleanupKeychain() }
@@ -205,12 +353,18 @@ struct SSHHostTrustKeychainStoreTests {
     @Test("Evaluate reports trusted for matching pinned host key")
     func evaluateTrusted() throws {
         defer { cleanupKeychain() }
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let refreshedAt = Date(timeIntervalSince1970: 1_700_000_100)
         let keyData = Data("server-key".utf8)
         try SSHHostTrustKeychainStore.save(
-            host: "example.com",
-            port: 22,
-            algorithm: "ssh-ed25519",
-            publicKeyData: keyData,
+            PinnedSSHHostKey(
+                host: "example.com",
+                port: 22,
+                algorithm: "ssh-ed25519",
+                publicKeyData: keyData,
+                createdAt: createdAt,
+                lastSeenAt: createdAt
+            ),
             config: config
         )
 
@@ -219,7 +373,8 @@ struct SSHHostTrustKeychainStoreTests {
             port: 22,
             algorithm: "SSH-ED25519",
             publicKeyData: keyData,
-            config: config
+            config: config,
+            lastSeenAt: refreshedAt
         )
 
         guard case .trusted(let hostKey) = result else {
@@ -227,6 +382,16 @@ struct SSHHostTrustKeychainStoreTests {
             return
         }
         #expect(hostKey.host == "example.com")
+        #expect(hostKey.createdAt == createdAt)
+        #expect(hostKey.lastSeenAt == refreshedAt)
+        let readback = try SSHHostTrustKeychainStore.retrieve(
+            host: "example.com",
+            port: 22,
+            algorithm: "ssh-ed25519",
+            publicKeyData: keyData,
+            config: config
+        )
+        #expect(readback == hostKey)
     }
 
     @Test("Evaluate reports changed for mismatched host key data")

@@ -5,6 +5,12 @@ import Security
 
 @Suite("SecretStoreConfiguration")
 struct ConfigurationTests {
+    @Test("Secret access policies are stable and exhaustive")
+    func secretAccessPolicies() {
+        #expect(SecretAccessPolicy.allCases == [.standard, .userPresence])
+        #expect(SecretAccessPolicy.userPresence.rawValue == "userPresence")
+    }
+
 
     @Test("Default init values")
     func defaultInit() {
@@ -31,6 +37,12 @@ struct ConfigurationTests {
     func accessGroupPassthrough() {
         let config = SecretStoreConfiguration(accessGroup: "TEAM.sh.glas.shared")
         #expect(config.accessGroup == "TEAM.sh.glas.shared")
+    }
+
+    @Test("Data-protection Keychain opt-in passes through")
+    func dataProtectionKeychainOptIn() {
+        let config = SecretStoreConfiguration(useDataProtectionKeychain: true)
+        #expect(config.useDataProtectionKeychain)
     }
 
     @Test("Legacy prefixes stored correctly")

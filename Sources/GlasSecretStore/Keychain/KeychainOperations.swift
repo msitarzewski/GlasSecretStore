@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import LocalAuthentication
 import Security
 
 public enum KeychainOperations: Sendable {
@@ -17,7 +18,8 @@ public enum KeychainOperations: Sendable {
         _ value: String,
         account: String,
         service: String,
-        config: SecretStoreConfiguration
+        config: SecretStoreConfiguration,
+        policy: SecretAccessPolicy = .standard
     ) throws {
         guard !value.isEmpty else {
             throw SecretStoreError.encodingFailed
@@ -25,15 +27,21 @@ public enum KeychainOperations: Sendable {
         guard let data = value.data(using: .utf8) else {
             throw SecretStoreError.encodingFailed
         }
-        try saveData(data, account: account, service: service, config: config)
+        try saveData(data, account: account, service: service, config: config, policy: policy)
     }
 
     public static func retrievePassword(
         account: String,
         service: String,
-        config: SecretStoreConfiguration
+        config: SecretStoreConfiguration,
+        authenticationPrompt: String? = nil
     ) throws -> String {
-        let data = try retrieveData(account: account, service: service, config: config)
+        let data = try retrieveData(
+            account: account,
+            service: service,
+            config: config,
+            authenticationPrompt: authenticationPrompt
+        )
         guard let value = String(data: data, encoding: .utf8) else {
             throw SecretStoreError.notFound
         }
@@ -45,17 +53,32 @@ public enum KeychainOperations: Sendable {
         account: String,
         primaryService: String,
         legacySuffix: String,
-        config: SecretStoreConfiguration
+        config: SecretStoreConfiguration,
+        authenticationPrompt: String? = nil
     ) throws -> String {
-        // Try primary first
-        if let value = try? retrievePassword(account: account, service: primaryService, config: config) {
-            return value
+        // Try primary first, but only fall back when it is genuinely absent.
+        do {
+            return try retrievePassword(
+                account: account,
+                service: primaryService,
+                config: config,
+                authenticationPrompt: authenticationPrompt
+            )
+        } catch SecretStoreError.notFound {
+            // Continue through the explicit legacy services.
         }
         // Try each legacy prefix
         for prefix in config.legacyServiceNamePrefixes {
             let legacyService = "\(prefix).\(legacySuffix)"
-            if let value = try? retrievePassword(account: account, service: legacyService, config: config) {
-                return value
+            do {
+                return try retrievePassword(
+                    account: account,
+                    service: legacyService,
+                    config: config,
+                    authenticationPrompt: authenticationPrompt
+                )
+            } catch SecretStoreError.notFound {
+                continue
             }
         }
         throw SecretStoreError.notFound
@@ -77,7 +100,8 @@ public enum KeychainOperations: Sendable {
         _ data: Data,
         account: String,
         service: String,
-        config: SecretStoreConfiguration
+        config: SecretStoreConfiguration,
+        policy: SecretAccessPolicy = .standard
     ) throws {
         guard data.count <= maxPayloadBytes else {
             throw SecretStoreError.payloadTooLarge(data.count)
@@ -85,11 +109,13 @@ public enum KeychainOperations: Sendable {
 
         // Atomic upsert: try update first, fall back to add
         let updateQuery = baseQuery(account: account, service: service, config: config)
-        let updateValues: [String: Any] = [
+        var updateValues: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: config.accessibility,
             kSecAttrComment as String: config.migrationMarkerComment
         ]
+        if policy == .standard {
+            updateValues[kSecAttrAccessible as String] = config.accessibility
+        }
         let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateValues as CFDictionary)
         if updateStatus == errSecSuccess { return }
 
@@ -99,9 +125,23 @@ public enum KeychainOperations: Sendable {
 
         // Item does not exist — add it
         var addQuery = baseQuery(account: account, service: service, config: config)
-        addQuery[kSecAttrAccessible as String] = config.accessibility
         addQuery[kSecAttrComment as String] = config.migrationMarkerComment
         addQuery[kSecValueData as String] = data
+        switch policy {
+        case .standard:
+            addQuery[kSecAttrAccessible as String] = config.accessibility
+        case .userPresence:
+            var accessControlError: Unmanaged<CFError>?
+            guard let accessControl = SecAccessControlCreateWithFlags(
+                nil,
+                config.accessibility,
+                .userPresence,
+                &accessControlError
+            ) else {
+                throw SecretStoreError.accessControlCreationFailed
+            }
+            addQuery[kSecAttrAccessControl as String] = accessControl
+        }
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
@@ -112,17 +152,27 @@ public enum KeychainOperations: Sendable {
     public static func retrieveData(
         account: String,
         service: String,
-        config: SecretStoreConfiguration
+        config: SecretStoreConfiguration,
+        authenticationPrompt: String? = nil
     ) throws -> Data {
         var query = baseQuery(account: account, service: service, config: config)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if let authenticationPrompt {
+            let context = LAContext()
+            context.localizedReason = authenticationPrompt
+            query[kSecUseAuthenticationContext as String] = context
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
+        if status == errSecItemNotFound {
             throw SecretStoreError.notFound
         }
+        guard status == errSecSuccess else {
+            throw SecretStoreError.queryFailed(status: status)
+        }
+        guard let data = result as? Data else { throw SecretStoreError.encodingFailed }
         return data
     }
 
@@ -153,7 +203,19 @@ public enum KeychainOperations: Sendable {
         if let accessGroup = config.accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
+        useDataProtectionKeychain(&query, enabled: config.useDataProtectionKeychain)
         return query
+    }
+
+    /// On macOS, opt into the modern data-protection Keychain used by iOS,
+    /// iPadOS, and visionOS. Other platforms already use that implementation
+    /// and do not accept this query key.
+    private static func useDataProtectionKeychain(_ query: inout [String: Any], enabled: Bool) {
+        #if os(macOS)
+        if enabled {
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        #endif
     }
 
     // MARK: - Bulk Query (for migration)
@@ -161,7 +223,7 @@ public enum KeychainOperations: Sendable {
     package static func allItems(
         service: String,
         config: SecretStoreConfiguration
-    ) -> [[String: Any]] {
+    ) throws -> [[String: Any]] {
         // Two-pass approach: macOS returns errSecParam (-50) when combining
         // kSecReturnData with kSecMatchLimitAll. Fetch attributes first,
         // then retrieve data per-item.
@@ -174,15 +236,22 @@ public enum KeychainOperations: Sendable {
         if let accessGroup = config.accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
+        useDataProtectionKeychain(&query, enabled: config.useDataProtectionKeychain)
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
+        if status == errSecItemNotFound {
             return []
+        }
+        guard status == errSecSuccess else {
+            throw SecretStoreError.queryFailed(status: status)
+        }
+        guard let items = result as? [[String: Any]] else {
+            throw SecretStoreError.encodingFailed
         }
 
         // Fetch data for each item individually
-        return items.map { item in
+        return try items.map { item in
             var enriched = item
             if let account = item[kSecAttrAccount as String] as? String {
                 var dataQuery: [String: Any] = [
@@ -195,11 +264,14 @@ public enum KeychainOperations: Sendable {
                 if let accessGroup = config.accessGroup {
                     dataQuery[kSecAttrAccessGroup as String] = accessGroup
                 }
+                useDataProtectionKeychain(&dataQuery, enabled: config.useDataProtectionKeychain)
                 var dataResult: AnyObject?
-                if SecItemCopyMatching(dataQuery as CFDictionary, &dataResult) == errSecSuccess,
-                   let data = dataResult as? Data {
-                    enriched[kSecValueData as String] = data
+                let dataStatus = SecItemCopyMatching(dataQuery as CFDictionary, &dataResult)
+                guard dataStatus == errSecSuccess else {
+                    throw SecretStoreError.queryFailed(status: dataStatus)
                 }
+                guard let data = dataResult as? Data else { throw SecretStoreError.encodingFailed }
+                enriched[kSecValueData as String] = data
             }
             return enriched
         }
@@ -219,6 +291,7 @@ public enum KeychainOperations: Sendable {
         if let accessGroup = config.accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
+        useDataProtectionKeychain(&query, enabled: config.useDataProtectionKeychain)
 
         let updateValues: [String: Any] = [
             kSecValueData as String: data,
@@ -245,6 +318,7 @@ public enum KeychainOperations: Sendable {
         if let accessGroup = config.accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
         }
+        useDataProtectionKeychain(&query, enabled: config.useDataProtectionKeychain)
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)

@@ -1,12 +1,13 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 
 import PackageDescription
 
 let package = Package(
     name: "GlasSecretStore",
     platforms: [
-        .visionOS(.v2),
-        .macOS(.v15)
+        .visionOS(.v26),
+        .macOS(.v26),
+        .iOS(.v26)
     ],
     products: [
         .library(name: "GlasSecretStore", targets: ["GlasSecretStore"]),
