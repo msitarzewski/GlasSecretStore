@@ -9,6 +9,16 @@
 import Foundation
 import Security
 
+/// Per-item protection applied in addition to the configuration's access
+/// group and service isolation.
+public enum SecretAccessPolicy: String, Codable, CaseIterable, Sendable {
+    /// Available whenever the configured Keychain accessibility permits.
+    case standard
+
+    /// Requires device-owner authentication for every retrieval.
+    case userPresence
+}
+
 public struct SecretStoreConfiguration: @unchecked Sendable {
     /// Primary service name prefix (e.g. "sh.glas").
     /// Keychain service names are derived as "\(prefix).passwords", "\(prefix).sshkeys.private", etc.
@@ -28,18 +38,24 @@ public struct SecretStoreConfiguration: @unchecked Sendable {
     /// For example, glassdb passes `["app.glassdb"]` to find items saved before unification.
     public let legacyServiceNamePrefixes: [String]
 
+    /// Opts macOS callers into the modern data-protection Keychain. Other
+    /// Apple platforms already use it and ignore this setting.
+    public let useDataProtectionKeychain: Bool
+
     public init(
         serviceNamePrefix: String = "sh.glas",
         accessGroup: String? = nil,
         accessibility: CFString = kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         migrationMarkerComment: String = "sh.glas.secretstore.v1",
-        legacyServiceNamePrefixes: [String] = []
+        legacyServiceNamePrefixes: [String] = [],
+        useDataProtectionKeychain: Bool = false
     ) {
         self.serviceNamePrefix = serviceNamePrefix
         self.accessGroup = accessGroup
         self.accessibility = accessibility
         self.migrationMarkerComment = migrationMarkerComment
         self.legacyServiceNamePrefixes = legacyServiceNamePrefixes
+        self.useDataProtectionKeychain = useDataProtectionKeychain
     }
 
     // MARK: - Derived Service Names

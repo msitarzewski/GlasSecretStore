@@ -48,14 +48,17 @@ public enum SecureEnclaveKeyManager: Sendable {
         return unwrapped
     }
 
-    public static func deleteKeyIfPresent(keyTag: String) {
+    public static func deleteKeyIfPresent(keyTag: String) throws {
         let tagData = keyTag.data(using: .utf8) ?? Data()
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tagData,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw SecretStoreError.unableToDelete
+        }
     }
 
     // MARK: - Private

@@ -14,7 +14,9 @@ public enum SecretStoreError: Error, LocalizedError, Sendable {
     case unsupportedSSHKeyType
     case secureEnclaveUnavailable
     case secureEnclaveOperationFailed
+    case accessControlCreationFailed
     case encodingFailed
+    case queryFailed(status: OSStatus)
     case updateFailed(account: String, status: OSStatus)
     case payloadTooLarge(Int)
 
@@ -32,8 +34,12 @@ public enum SecretStoreError: Error, LocalizedError, Sendable {
             return "Secure Enclave is unavailable on this device."
         case .secureEnclaveOperationFailed:
             return "Secure Enclave operation failed."
+        case .accessControlCreationFailed:
+            return "Unable to create the requested Keychain access control."
         case .encodingFailed:
             return "Failed to encode value for Keychain storage."
+        case .queryFailed(let status):
+            return "Failed to query Keychain items (OSStatus \(status))."
         case .updateFailed(let account, let status):
             return "Failed to update Keychain item for account '\(account)' (OSStatus \(status))."
         case .payloadTooLarge(let size):

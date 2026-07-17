@@ -124,7 +124,12 @@ public final class SecretStoreMigrationManager: @unchecked Sendable {
     }
 
     private func migrateServiceToMarkedItems(service: String) -> (migrated: Int, failed: Int) {
-        let items = KeychainOperations.allItems(service: service, config: config)
+        let items: [[String: Any]]
+        do {
+            items = try KeychainOperations.allItems(service: service, config: config)
+        } catch {
+            return (0, 1)
+        }
         var migrated = 0
         var failed = 0
         for item in items {

@@ -16,14 +16,14 @@ struct SecureEnclaveKeyManagerTests {
     @Test("wrap throws secureEnclaveUnavailable on Simulator")
     func wrapThrowsOnSimulator() {
         let tag = "test.se.\(UUID().uuidString.prefix(8))"
-        defer { SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: tag) }
+        defer { try? SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: tag) }
         #expect(throws: (any Error).self) {
             try SecureEnclaveKeyManager.wrap(data: Data("test".utf8), keyTag: tag)
         }
     }
 
     @Test("deleteKeyIfPresent does not throw on non-existent tag")
-    func deleteNonExistent() {
-        SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: "nonexistent.tag.\(UUID().uuidString)")
+    func deleteNonExistent() throws {
+        try SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: "nonexistent.tag.\(UUID().uuidString)")
     }
 }

@@ -18,27 +18,16 @@ public enum SSHKeyKeychainStore: Sendable {
         for keyID: UUID,
         config: SecretStoreConfiguration
     ) throws {
+        let bundle = StoredSSHKeyBundle(
+            privateKey: privateKey.toData(),
+            passphrase: passphrase.flatMap { $0.count > 0 ? $0.toData() : nil }
+        )
         try KeychainOperations.saveData(
-            privateKey.toData(),
+            try JSONEncoder().encode(bundle),
             account: keyID.uuidString,
             service: config.sshKeysPrivateService,
             config: config
         )
-        if let passphrase, passphrase.count > 0 {
-            try KeychainOperations.saveData(
-                passphrase.toData(),
-                account: keyID.uuidString,
-                service: config.sshKeysPassphraseService,
-                config: config
-            )
-        } else {
-            // Clear any stale passphrase
-            try? KeychainOperations.deleteItem(
-                account: keyID.uuidString,
-                service: config.sshKeysPassphraseService,
-                config: config
-            )
-        }
     }
 
     // MARK: - Retrieve
@@ -48,33 +37,48 @@ public enum SSHKeyKeychainStore: Sendable {
         config: SecretStoreConfiguration
     ) throws -> SSHKeyMaterial {
         // Try plain key first (retrieve as Data to avoid intermediate String)
-        if let privateKeyData = try? KeychainOperations.retrieveData(
-            account: keyID.uuidString,
-            service: config.sshKeysPrivateService,
-            config: config
-        ) {
-            let passphraseData = try? KeychainOperations.retrieveData(
+        do {
+            let privateKeyData = try KeychainOperations.retrieveData(
                 account: keyID.uuidString,
-                service: config.sshKeysPassphraseService,
+                service: config.sshKeysPrivateService,
                 config: config
             )
+            if let bundle = try? JSONDecoder().decode(StoredSSHKeyBundle.self, from: privateKeyData) {
+                return SSHKeyMaterial(
+                    privateKey: SecureBytes(bundle.privateKey),
+                    passphrase: bundle.passphrase.map(SecureBytes.init)
+                )
+            }
+            let passphraseData: Data?
+            do {
+                passphraseData = try KeychainOperations.retrieveData(
+                    account: keyID.uuidString,
+                    service: config.sshKeysPassphraseService,
+                    config: config
+                )
+            } catch SecretStoreError.notFound {
+                passphraseData = nil
+            }
             return SSHKeyMaterial(
                 privateKey: SecureBytes(privateKeyData),
                 passphrase: passphraseData.map { SecureBytes($0) }
             )
+        } catch SecretStoreError.notFound {
+            // Try the Secure Enclave representation below.
         }
 
         // Try Secure Enclave wrapped P256
-        if let (wrapped, keyTag) = try? retrieveSecureEnclaveWrapped(for: keyID, config: config) {
+        do {
+            let (wrapped, keyTag) = try retrieveSecureEnclaveWrapped(for: keyID, config: config)
             let raw = try SecureEnclaveKeyManager.unwrap(wrapped: wrapped, keyTag: keyTag)
             let marker = "SECURE_ENCLAVE_P256:\(raw.base64EncodedString())"
             return SSHKeyMaterial(
                 privateKey: SecureBytes(Data(marker.utf8)),
                 passphrase: nil
             )
+        } catch SecretStoreError.notFound {
+            throw SecretStoreError.notFound
         }
-
-        throw SecretStoreError.notFound
     }
 
     // MARK: - Delete
@@ -84,24 +88,31 @@ public enum SSHKeyKeychainStore: Sendable {
         config: SecretStoreConfiguration
     ) throws {
         // 1. Read SE key tag while references still exist
-        let seKeyTag = try? KeychainOperations.retrievePassword(
-            account: keyID.uuidString,
-            service: config.sealedP256TagService,
-            config: config
-        )
+        let seKeyTag: String?
+        do {
+            seKeyTag = try KeychainOperations.retrievePassword(
+                account: keyID.uuidString,
+                service: config.sealedP256TagService,
+                config: config
+            )
+        } catch SecretStoreError.notFound {
+            seKeyTag = nil
+        } catch {
+            throw error
+        }
 
         // 2. Delete SE key from Secure Enclave first
         if let keyTag = seKeyTag {
-            SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: keyTag)
+            try SecureEnclaveKeyManager.deleteKeyIfPresent(keyTag: keyTag)
         }
 
         // 3. Delete SE Keychain artifacts (wrapped blob + tag)
-        try? KeychainOperations.deleteItem(
+        try KeychainOperations.deleteItem(
             account: keyID.uuidString,
             service: config.sealedP256Service,
             config: config
         )
-        try? KeychainOperations.deleteItem(
+        try KeychainOperations.deleteItem(
             account: keyID.uuidString,
             service: config.sealedP256TagService,
             config: config
@@ -113,11 +124,16 @@ public enum SSHKeyKeychainStore: Sendable {
             service: config.sshKeysPrivateService,
             config: config
         )
-        try? KeychainOperations.deleteItem(
+        try KeychainOperations.deleteItem(
             account: keyID.uuidString,
             service: config.sshKeysPassphraseService,
             config: config
         )
+    }
+
+    private struct StoredSSHKeyBundle: Codable {
+        let privateKey: Data
+        let passphrase: Data?
     }
 
     // MARK: - Secure Enclave Wrapped P256
