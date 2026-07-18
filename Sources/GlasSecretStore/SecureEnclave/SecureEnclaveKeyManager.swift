@@ -61,6 +61,10 @@ public enum SecureEnclaveKeyManager: Sendable {
         }
     }
 
+    public static func keyExists(keyTag: String) throws -> Bool {
+        try secureEnclavePrivateKey(keyTag: keyTag, createIfMissing: false) != nil
+    }
+
     // MARK: - Private
 
     private static func secureEnclavePrivateKey(keyTag: String, createIfMissing: Bool) throws -> SecKey? {
@@ -76,7 +80,11 @@ public enum SecureEnclaveKeyManager: Sendable {
         if status == errSecSuccess, let ref = result {
             return (ref as! SecKey)
         }
-        if !createIfMissing { return nil }
+        if status == errSecItemNotFound {
+            if !createIfMissing { return nil }
+        } else {
+            throw SecretStoreError.queryFailed(status: status)
+        }
 
         var error: Unmanaged<CFError>?
         let access = SecAccessControlCreateWithFlags(
