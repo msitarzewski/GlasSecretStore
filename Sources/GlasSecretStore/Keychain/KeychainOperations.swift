@@ -123,7 +123,32 @@ public enum KeychainOperations: Sendable {
             throw SecretStoreError.unableToSave
         }
 
-        // Item does not exist — add it
+        // Item does not exist — add it. A concurrent creator wins rather than
+        // being overwritten by this upsert attempt.
+        guard try addDataIfAbsent(
+            data,
+            account: account,
+            service: service,
+            config: config,
+            policy: policy
+        ) else {
+            throw SecretStoreError.unableToSave
+        }
+    }
+
+    /// Atomically inserts a generic-password item only when the account is
+    /// absent. Returns `false` for a duplicate without modifying its bytes.
+    public static func addDataIfAbsent(
+        _ data: Data,
+        account: String,
+        service: String,
+        config: SecretStoreConfiguration,
+        policy: SecretAccessPolicy = .standard
+    ) throws -> Bool {
+        guard data.count <= maxPayloadBytes else {
+            throw SecretStoreError.payloadTooLarge(data.count)
+        }
+
         var addQuery = baseQuery(account: account, service: service, config: config)
         addQuery[kSecAttrComment as String] = config.migrationMarkerComment
         addQuery[kSecValueData as String] = data
@@ -144,9 +169,13 @@ public enum KeychainOperations: Sendable {
         }
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            return false
+        }
         guard addStatus == errSecSuccess else {
             throw SecretStoreError.unableToSave
         }
+        return true
     }
 
     public static func retrieveData(

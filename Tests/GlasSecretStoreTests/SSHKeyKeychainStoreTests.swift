@@ -78,6 +78,181 @@ struct SSHKeyKeychainStoreTests {
         #expect(material.passphrase == nil)
     }
 
+    @Test("Add-if-absent preserves an existing imported key")
+    func addIfAbsentPreservesExistingKey() throws {
+        defer { cleanupKeychain() }
+        let first = try SSHKeyKeychainStore.addIfAbsent(
+            privateKey: SecureBytes(Data("first-key".utf8)),
+            passphrase: nil,
+            for: keyID,
+            config: config
+        )
+        let duplicate = try SSHKeyKeychainStore.addIfAbsent(
+            privateKey: SecureBytes(Data("replacement-key".utf8)),
+            passphrase: SecureBytes(Data("replacement-passphrase".utf8)),
+            for: keyID,
+            config: config
+        )
+        let material = try SSHKeyKeychainStore.retrieve(for: keyID, config: config)
+
+        #expect(first)
+        #expect(!duplicate)
+        #expect(material.privateKey.toUTF8String() == "first-key")
+        #expect(material.passphrase == nil)
+    }
+
+    @Test("Delete restores every artifact when any step fails before hardware removal")
+    func deleteRestoresArtifactsAfterEachFailureStep() throws {
+        let services = [
+            config.sealedP256Service,
+            config.sealedP256TagService,
+            config.sshKeysPrivateService,
+            config.sshKeysPassphraseService,
+        ]
+        let keyTag = "test.secure-enclave.\(keyID.uuidString)"
+        let originals = Dictionary(uniqueKeysWithValues: services.enumerated().map { index, service in
+            let value = service == config.sealedP256TagService
+                ? Data(keyTag.utf8)
+                : Data("artifact-\(index)".utf8)
+            return (service, value)
+        })
+
+        for failingService in services {
+            var values = originals
+            var hardwareKeyExists = true
+            var hardwareDeleteCount = 0
+            let operations = SSHKeyDeletionOperations(
+                read: { _, service, _ in values[service] },
+                delete: { _, service, _ in
+                    values.removeValue(forKey: service)
+                    if service == failingService {
+                        throw SecretStoreError.unableToDelete
+                    }
+                },
+                addIfAbsent: { data, _, service, _ in
+                    guard values[service] == nil else { return false }
+                    values[service] = data
+                    return true
+                },
+                secureEnclaveKeyExists: { _ in hardwareKeyExists },
+                deleteSecureEnclaveKey: { _ in
+                    hardwareDeleteCount += 1
+                    hardwareKeyExists = false
+                }
+            )
+
+            #expect(throws: SecretStoreError.self) {
+                try SSHKeyKeychainStore.delete(
+                    for: keyID,
+                    config: config,
+                    operations: operations
+                )
+            }
+            #expect(values == originals)
+            #expect(hardwareKeyExists)
+            #expect(hardwareDeleteCount == 0)
+        }
+    }
+
+    @Test("Delete restores artifacts when hardware deletion fails without mutation")
+    func deleteRestoresArtifactsAfterHardwareFailure() throws {
+        let keyTag = "test.secure-enclave.\(keyID.uuidString)"
+        let originals: [String: Data] = [
+            config.sealedP256Service: Data("wrapped".utf8),
+            config.sealedP256TagService: Data(keyTag.utf8),
+        ]
+        var values = originals
+        let operations = SSHKeyDeletionOperations(
+            read: { _, service, _ in values[service] },
+            delete: { _, service, _ in _ = values.removeValue(forKey: service) },
+            addIfAbsent: { data, _, service, _ in
+                guard values[service] == nil else { return false }
+                values[service] = data
+                return true
+            },
+            secureEnclaveKeyExists: { _ in true },
+            deleteSecureEnclaveKey: { _ in throw SecretStoreError.unableToDelete }
+        )
+
+        #expect(throws: SecretStoreError.self) {
+            try SSHKeyKeychainStore.delete(
+                for: keyID,
+                config: config,
+                operations: operations
+            )
+        }
+        #expect(values == originals)
+    }
+
+    @Test("Delete restores encrypted artifacts when hardware status is indeterminate")
+    func deleteRestoresArtifactsWhenHardwareStatusIsIndeterminate() throws {
+        let keyTag = "test.secure-enclave.\(keyID.uuidString)"
+        let originals: [String: Data] = [
+            config.sealedP256Service: Data("wrapped".utf8),
+            config.sealedP256TagService: Data(keyTag.utf8),
+        ]
+        var values = originals
+        let operations = SSHKeyDeletionOperations(
+            read: { _, service, _ in values[service] },
+            delete: { _, service, _ in _ = values.removeValue(forKey: service) },
+            addIfAbsent: { data, _, service, _ in
+                guard values[service] == nil else { return false }
+                values[service] = data
+                return true
+            },
+            secureEnclaveKeyExists: { _ in
+                throw SecretStoreError.queryFailed(status: errSecInteractionNotAllowed)
+            },
+            deleteSecureEnclaveKey: { _ in throw SecretStoreError.unableToDelete }
+        )
+
+        #expect(throws: SecretStoreError.self) {
+            try SSHKeyKeychainStore.delete(
+                for: keyID,
+                config: config,
+                operations: operations
+            )
+        }
+        #expect(values == originals)
+    }
+
+    @Test("Legacy Secure Enclave provenance rejects a preferred imported record")
+    func legacySecureEnclaveProvenanceRejectsImportedRecord() throws {
+        defer { cleanupKeychain() }
+        let marker = "SECURE_ENCLAVE_P256:dmVyaWZpZWQ="
+        let material = SSHKeyMaterial(
+            privateKey: SecureBytes(Data(marker.utf8)),
+            passphrase: nil
+        )
+        #expect(try SSHKeyKeychainStore.addIfAbsent(
+            privateKey: material.privateKey,
+            passphrase: nil,
+            for: keyID,
+            config: config
+        ))
+
+        #expect(try !SSHKeyKeychainStore.verifiesLegacySecureEnclaveBacking(
+            material,
+            for: keyID,
+            config: config
+        ))
+    }
+
+    @Test("Artifact presence detects an orphaned passphrase without private material")
+    func artifactPresenceDetectsPassphraseOnly() throws {
+        defer { cleanupKeychain() }
+        try KeychainOperations.saveData(
+            Data("orphaned-passphrase".utf8),
+            account: keyID.uuidString,
+            service: config.sshKeysPassphraseService,
+            config: config
+        )
+
+        #expect(try SSHKeyKeychainStore.hasAnyArtifacts(for: keyID, config: config))
+        try SSHKeyKeychainStore.delete(for: keyID, config: config)
+        #expect(try !SSHKeyKeychainStore.hasAnyArtifacts(for: keyID, config: config))
+    }
+
     @Test("Delete removes all artifacts")
     func deleteRemovesAll() throws {
         defer { cleanupKeychain() }

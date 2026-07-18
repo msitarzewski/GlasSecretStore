@@ -95,6 +95,32 @@ struct KeychainOperationsTests {
         #expect(retrieved == Data([0x02]))
     }
 
+    @Test("Add-if-absent preserves the first value")
+    func dataAddIfAbsent() throws {
+        defer { cleanupKeychain() }
+        let inserted = try KeychainOperations.addDataIfAbsent(
+            Data([0x01]),
+            account: "d1",
+            service: service,
+            config: config
+        )
+        let duplicate = try KeychainOperations.addDataIfAbsent(
+            Data([0x02]),
+            account: "d1",
+            service: service,
+            config: config
+        )
+        let retrieved = try KeychainOperations.retrieveData(
+            account: "d1",
+            service: service,
+            config: config
+        )
+
+        #expect(inserted)
+        #expect(!duplicate)
+        #expect(retrieved == Data([0x01]))
+    }
+
     @Test("Payload over 1 MB throws payloadTooLarge")
     func payloadTooLarge() {
         defer { cleanupKeychain() }
