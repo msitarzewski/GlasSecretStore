@@ -33,6 +33,20 @@ struct ConfigurationTests {
         #expect(config.sshHostTrustService == "com.test.ssh.hosttrust")
     }
 
+    @Test("Glass-family credential accounts preserve UUID identity")
+    func glassFamilyCredentialAccounts() {
+        let profileID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+
+        #expect(
+            GlassFamilyCredentialAccount.databasePassword(profileID: profileID)
+                == "database:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        )
+        #expect(
+            GlassFamilyCredentialAccount.sshPassword(profileID: profileID)
+                == "ssh:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        )
+    }
+
     @Test("Access group passes through")
     func accessGroupPassthrough() {
         let config = SecretStoreConfiguration(accessGroup: "TEAM.sh.glas.shared")
