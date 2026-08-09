@@ -19,6 +19,20 @@ public enum SecretAccessPolicy: String, Codable, CaseIterable, Sendable {
     case userPresence
 }
 
+/// Canonical UUID-scoped account names for credentials intentionally shared by
+/// Glass-family apps. Keeping this identity contract in GlasSecretStore prevents
+/// each app from growing a subtly incompatible account namespace while retaining
+/// per-profile isolation for otherwise identical endpoints.
+public enum GlassFamilyCredentialAccount: Sendable {
+    public static func databasePassword(profileID: UUID) -> String {
+        "database:\(profileID.uuidString.lowercased())"
+    }
+
+    public static func sshPassword(profileID: UUID) -> String {
+        "ssh:\(profileID.uuidString.lowercased())"
+    }
+}
+
 public struct SecretStoreConfiguration: @unchecked Sendable {
     /// Primary service name prefix (e.g. "sh.glas").
     /// Keychain service names are derived as "\(prefix).passwords", "\(prefix).sshkeys.private", etc.

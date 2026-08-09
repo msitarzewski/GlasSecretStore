@@ -45,5 +45,21 @@
   - Kept UI policy out of the package and preserved existing public APIs by reusing `SecretStoreError.encodingFailed` for validation failures
   - Tests now pass at 62 tests across 13 suites
 
+## Current Working Contract (2026-08)
+
+- [x] Repository CI runs package tests and a Release build for pushes and pull requests
+- [x] Package manifest declares visionOS 26, macOS 26, and iOS/iPadOS 26
+- [x] Shared access-group configuration and canonical Glass-family UUID account
+  helpers support current same-device consumer integration
+- [x] Fresh 2026-08-09 package verification passes 76/76 tests across 13 suites,
+  including the canonical Glass-family UUID account test
+- [x] Product/architecture direction approved for the **My Connections**
+  credential authority; implementation status remains explicit below
+
 ## Not Started
-- CI/CD
+- Stable family credential/availability catalog independent of app profile IDs
+- Eligible password/passphrase/imported-key synchronization and migration
+- Cross-device deletion, revocation, rotation, conflict, recovery, offline, and
+  iCloud account-change semantics
+- Signed cross-app/device acceptance across glas.sh and glassdb
+- Device-bound enrollment UX contract for Secure Enclave/user-presence material

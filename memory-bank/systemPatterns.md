@@ -12,7 +12,65 @@ KeychainOperations (low-level SecItem CRUD)
 SSHKeyKeychainStore (SSH key save/retrieve/delete)
 SecureEnclaveKeyManager (P256 wrap/unwrap)
 SecretStoreMigrationManager (v0→v1 stamp migration)
+SSHHostTrustKeychainStore (SSH host identity and rotation history)
 ```
+
+The current implementation provides Keychain operations, SSH-key lifecycle,
+Secure Enclave wrapping, migration support, host trust, and canonical
+Glass-family UUID account names. A synchronized credential catalog and eligible
+cross-device item flow are approved planned work, not current capability.
+
+## Glass-Family Credential Contract
+
+### Ownership Boundary
+
+- GlasSecretStore owns stable `CredentialID`, credential kind, availability,
+  storage/mobility/authentication policy, secret material, migration, deletion,
+  and SSH host trust.
+- It does not own `EndpointProfile`, CloudKit endpoint records, database overlays,
+  terminal/workspace settings, onboarding UI, or connection execution.
+- Consumer apps exchange stable endpoint-to-credential references; they never
+  derive family identity from mutable `user@host:port` fields or create parallel
+  catalogs.
+
+### Orthogonal Policy Axes
+
+- **App sharing**: which signed Glass-family apps may discover and retrieve a
+  credential through an approved access group.
+- **Device mobility**: whether eligible material may synchronize to another Apple
+  device after explicit consent.
+- **Authentication kind**: password, imported key/passphrase, device-bound Secure
+  Enclave representation, user-presence record, or another supported method.
+- These axes must be modeled independently. `sharedWithGlass` does not imply
+  synchronizable, and synchronizable does not remove authentication or trust
+  requirements.
+
+### Availability Contract
+
+- Resolve an explicit local state before a consumer connects: available locally,
+  pending mobility, iCloud account action required, local enrollment required,
+  host-trust review required, revoked/deleted, or unsupported.
+- Consumer-facing mappings are **Ready**, **Still Syncing**, **Sign In to
+  iCloud**, **Set Up This Key**, and **Review Fingerprint**.
+- Metadata arrival never proves secret availability. Never silently substitute a
+  password or exportable key for missing device-bound material.
+
+### Planned Synchronization Boundary
+
+- Current configurations default to `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
+  and do not implement `kSecAttrSynchronizable`; this remains the migration
+  baseline until the planned work passes.
+- Only explicitly eligible passwords, passphrases, and exportable imported keys
+  may enter the Apple-protected mobility path. Secure Enclave and
+  user-presence-protected material remains device-bound.
+- Synchronizable item CRUD must set/query the correct Keychain attributes
+  consistently, handle duplicate/concurrent records deterministically, and never
+  leak secret material into the non-secret catalog or CloudKit metadata.
+- Migration is forward-only, atomic-add-if-absent, conflict-preserving,
+  rollback-aware, and safe under app-version skew. Deletion, revocation, and
+  rotation must define cross-device propagation and recovery before shipping.
+- Host trust remains an explicit device/security decision unless separately
+  approved; a synced endpoint or credential never auto-approves a fingerprint.
 
 ## Key Patterns
 
